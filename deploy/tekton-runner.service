@@ -1,0 +1,29 @@
+# Tekton runner — polls Hermes for jobs and drives the agent.
+# Install:
+#   sudo cp deploy/tekton-runner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now tekton-runner
+# Logs:  journalctl -u tekton-runner -f
+#
+# Runs on the rig HOST as the human user, not root and not in the sandbox:
+# it needs the deploy key in ~/.ssh (ADR-10 property 3) and the Docker socket
+# to start the workspace. The AGENT is what gets walled, not the runner.
+[Unit]
+Description=Tekton runner (D3.4)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shak4031
+WorkingDirectory=/home/shak4031/tekton
+Environment="OPENHANDS_SUPPRESS_BANNER=1"
+ExecStart=/home/shak4031/.local/bin/uv run python -m tekton_runner.main
+Restart=on-failure
+RestartSec=30
+# A job can outrun this; the runner exits cleanly on SIGTERM between jobs.
+TimeoutStopSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
