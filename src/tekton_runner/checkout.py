@@ -17,10 +17,11 @@ lives. Neither the filesystem wall nor the network wall sees that path.
 from __future__ import annotations
 
 import os
-import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+from tekton_runner.proc import CommandError, run
 
 DEFAULT_REGISTRY = Path("~/tekton/projects.toml")
 DEFAULT_BRANCH = "main"
@@ -32,7 +33,7 @@ GIT_TIMEOUT_S = 300
 ACL_TIMEOUT_S = 60
 
 # Hooks off on every call: see the module docstring.
-_GIT_BASE = ("git", "-c", "core.hooksPath=/dev/null")
+GIT_BASE = ("git", "-c", "core.hooksPath=/dev/null")
 
 
 class CheckoutError(RuntimeError):
@@ -74,24 +75,11 @@ def _git_env() -> dict[str, str]:
 
 
 def _run(args: tuple[str, ...], cwd: Path | None = None, timeout: int = GIT_TIMEOUT_S) -> str:
-    """Run a command, returning stdout; raise GitError on any failure."""
+    """Run a git command, returning stdout; raise GitError on any failure."""
     try:
-        done = subprocess.run(  # noqa: S603 - fixed argv, no shell, no user input in argv[0]
-            args,
-            cwd=None if cwd is None else str(cwd),
-            env=_git_env(),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise GitError(f"{args[0]} is not installed on this host") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise GitError(f"{' '.join(args)} timed out after {timeout}s") from exc
-    if done.returncode != 0:
-        raise GitError(f"{' '.join(args)} failed ({done.returncode}): {done.stderr.strip()}")
-    return done.stdout
+        return run(args, cwd=cwd, env=_git_env(), timeout=timeout)
+    except CommandError as exc:
+        raise GitError(str(exc)) from exc
 
 
 def load_registry(path: Path | None = None) -> dict[str, Project]:
@@ -142,7 +130,7 @@ def resolve(name: str, registry: dict[str, Project]) -> Project:
 def _clone(project: Project) -> None:
     """Clone a project that has no checkout yet."""
     project.path.parent.mkdir(parents=True, exist_ok=True)
-    _run((*_GIT_BASE, "clone", "--branch", project.branch, project.url, str(project.path)))
+    _run((*GIT_BASE, "clone", "--branch", project.branch, project.url, str(project.path)))
 
 
 def _refresh(project: Project) -> None:
@@ -154,10 +142,10 @@ def _refresh(project: Project) -> None:
     gitignored files alone, so a project's own `.env` survives.
     """
     at = project.path
-    _run((*_GIT_BASE, "fetch", "--prune", "origin"), cwd=at)
-    _run((*_GIT_BASE, "checkout", project.branch), cwd=at)
-    _run((*_GIT_BASE, "reset", "--hard", f"origin/{project.branch}"), cwd=at)
-    _run((*_GIT_BASE, "clean", "-fd"), cwd=at)
+    _run((*GIT_BASE, "fetch", "--prune", "origin"), cwd=at)
+    _run((*GIT_BASE, "checkout", project.branch), cwd=at)
+    _run((*GIT_BASE, "reset", "--hard", f"origin/{project.branch}"), cwd=at)
+    _run((*GIT_BASE, "clean", "-fd"), cwd=at)
 
 
 def apply_acls(path: Path, agent_uid: int = AGENT_UID) -> None:
@@ -175,7 +163,7 @@ def apply_acls(path: Path, agent_uid: int = AGENT_UID) -> None:
                 ("setfacl", "-R", "-m", f"u:{uid}:rwX", "-m", f"d:u:{uid}:rwX", str(path)),
                 timeout=ACL_TIMEOUT_S,
             )
-        except GitError as exc:
+        except (GitError, CommandError) as exc:
             raise AclError(f"setfacl failed for uid {uid}: {exc}") from exc
 
 
@@ -197,4 +185,4 @@ def prepare(name: str, registry_path: Path | None = None) -> Path:
 
 def head_sha(path: Path) -> str:
     """Return the checked-out commit, for the job's structured log line."""
-    return _run((*_GIT_BASE, "rev-parse", "HEAD"), cwd=path).strip()
+    return _run((*GIT_BASE, "rev-parse", "HEAD"), cwd=path).strip()
