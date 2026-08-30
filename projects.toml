@@ -1,0 +1,18 @@
+# Tekton project registry (ADR-10). The ONLY place a project name becomes a
+# path or a URL. An unknown name fails the job immediately; the runner never
+# guesses a path or invents a repo.
+#
+# url  = SSH host ALIAS from ~/.ssh/config, not github.com — the alias is what
+#        selects that repo's deploy key. Verify with: ssh -T github-<alias>
+# path = host checkout, mounted into the sandbox by slice 5. Never ~/tekton
+#        itself: the runner must not mount the code that drives it.
+
+[sandbox-test]
+url = "github-sandbox:shak4031/sandbox-test.git"
+path = "~/projects/sandbox-test"
+branch = "main"
+
+[tekton]
+url = "github-tekton:shak4031/tekton.git"
+path = "~/projects/tekton"
+branch = "main"
