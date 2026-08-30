@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tekton_runner import checkout as mod
 from tekton_runner.checkout import (
     AGENT_UID,
     GIT_BASE,
@@ -25,6 +26,7 @@ from tekton_runner.checkout import (
     head_sha,
     load_registry,
     prepare,
+    reclaim,
     resolve,
 )
 
@@ -168,3 +170,30 @@ def test_apply_acls_grants_the_agent_uid(tmp_path: Path) -> None:
 def test_project_defaults_to_main() -> None:
     """A registry entry without an explicit branch tracks main."""
     assert Project(name="p", url="u", path=Path("/srv/p")).branch == "main"
+
+
+def test_reclaim_reuses_the_pinned_image_and_runs_as_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One pin, one place: reclaim must not name its own image."""
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(mod, "run", lambda args, **_k: seen.append(tuple(args)) or "")
+    monkeypatch.setattr(mod, "apply_acls", lambda _p: None)
+    reclaim(tmp_path)
+    argv = seen[0]
+    assert argv[0] == "docker"
+    assert "--user" in argv
+    assert argv[argv.index("--user") + 1] == "0"
+    assert mod.AGENT_IMAGE in argv
+    assert "sudo" not in " ".join(argv)
+
+
+def test_reclaim_reapplies_the_acl_pair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Chown alone leaves mask::--- behind; setfacl is what recalculates it."""
+    applied: list[Path] = []
+    monkeypatch.setattr(mod, "run", lambda *_a, **_k: "")
+    monkeypatch.setattr(mod, "apply_acls", applied.append)
+    reclaim(tmp_path)
+    assert applied == [tmp_path]

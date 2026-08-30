@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tekton_runner.proc import CommandError, run
+from tekton_runner.workspace import AGENT_IMAGE
 
 DEFAULT_REGISTRY = Path("~/tekton/projects.toml")
 DEFAULT_BRANCH = "main"
@@ -31,6 +32,7 @@ AGENT_UID = 10001
 
 GIT_TIMEOUT_S = 300
 ACL_TIMEOUT_S = 60
+RECLAIM_TIMEOUT_S = 120
 
 # Hooks off on every call: see the module docstring.
 GIT_BASE = ("git", "-c", "core.hooksPath=/dev/null")
@@ -186,3 +188,38 @@ def prepare(name: str, registry_path: Path | None = None) -> Path:
 def head_sha(path: Path) -> str:
     """Return the checked-out commit, for the job's structured log line."""
     return _run((*GIT_BASE, "rev-parse", "HEAD"), cwd=path).strip()
+
+
+def reclaim(checkout: Path) -> None:
+    """Take ownership back after the agent has written as uid 10001.
+
+    Files the agent creates are owned by uid 10001 with mode 0600, and POSIX
+    derives an ACL's mask from the create mode's group bits — so the inherited
+    `user:1000:rwx` entry lands masked to `#effective:---`. D3.2 proved the
+    agent can write into the mount; it never checked whether the host could
+    read back what the agent wrote. It could not.
+
+    `setfacl` cannot fix this on its own: it requires ownership, and the host
+    user does not own the new files. So a throwaway root container chowns them
+    first — reusing the already-pinned agent image rather than adding a
+    dependency, and using Docker the runner already drives rather than sudo,
+    which D3.2 deliberately kept out of the run-time path.
+
+    Called after the agent exits and before the runner commits (ADR-10.4);
+    without it, `git add` cannot read the agent's own work and the SDLC loop
+    does not close.
+    """
+    uid, gid = os.getuid(), os.getgid()
+    try:
+        run(
+            (
+                "docker", "run", "--rm", "--user", "0",
+                "-v", f"{checkout}:/reclaim",
+                "--entrypoint", "sh", AGENT_IMAGE,
+                "-c", f"chown -R {uid}:{gid} /reclaim",
+            ),
+            timeout=RECLAIM_TIMEOUT_S,
+        )
+    except CommandError as exc:
+        raise AclError(f"could not reclaim {checkout}: {exc}") from exc
+    apply_acls(checkout)
