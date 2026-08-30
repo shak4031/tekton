@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 from tekton_runner.checkout import (
-    _GIT_BASE,
     AGENT_UID,
+    GIT_BASE,
     CheckoutError,
     GitError,
     Project,
@@ -150,7 +150,7 @@ def test_clone_failure_surfaces_as_git_error(tmp_path: Path) -> None:
 
 def test_hooks_are_disabled_on_every_git_call() -> None:
     """A hook in .git would run on the HOST with the runner's privileges."""
-    assert "core.hooksPath=/dev/null" in _GIT_BASE
+    assert "core.hooksPath=/dev/null" in GIT_BASE
 
 
 @pytest.mark.skipif(not HAS_SETFACL, reason="setfacl not available")
